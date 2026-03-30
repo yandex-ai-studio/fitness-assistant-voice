@@ -1,54 +1,84 @@
 #!/usr/bin/env python3
+"""
+Голосовой фитнес-ассистент на базе Yandex Cloud Realtime API.
+
+Помогает с расчетом калорий, рекомендациями по добавкам и поиском информации о фитнесе.
+
+Требования:
+    pip install aiohttp yandex-ai-studio-sdk
+
+Переменные окружения:
+    YANDEX_CLOUD_FOLDER_ID - ID каталога в Yandex Cloud
+    YANDEX_CLOUD_API_KEY   - API-ключ для доступа к сервисам
+    VECTOR_STORE_ID        - (опционально) ID индекса с базой знаний о фитнесе
+
+Запуск:
+    export YANDEX_CLOUD_FOLDER_ID="your_folder_id"
+    export YANDEX_CLOUD_API_KEY="your_api_key"
+    python3 voice-agent-fitness.py
+
+Документация:
+    https://yandex.cloud/ru/docs/foundation-models/concepts/realtime
+"""
 from __future__ import annotations
 
 import asyncio
 import base64
 import json
 import logging
+import os
 import sys
 
 import aiohttp
 
-from yandex_cloud_ml_sdk._experimental.audio.microphone import AsyncMicrophone
-from yandex_cloud_ml_sdk._experimental.audio.out import AsyncAudioOut
+from yandex_ai_studio_sdk._experimental.audio.microphone import AsyncMicrophone
+from yandex_ai_studio_sdk._experimental.audio.out import AsyncAudioOut
 
 assert sys.version_info >= (3, 10), "Python 3.10+ is required"
 
-# Настройки API
+# ==== Конфигурация ====
 
 # Конфигурация аудио для сервера
 IN_RATE = 44100
 OUT_RATE = 44100
 CHANNELS = 1
-VOICE = "dasha"
+VOICE = "masha"
 
 # Конфигурация инструментов
-VECTOR_STORE_ID = "..."  # ID индекса с базой знаний о фитнесе
+VECTOR_STORE_ID = os.getenv("VECTOR_STORE_ID", "<идентификатор_поискового_индекса>")  # ID индекса с базой знаний о фитнесе
 
 # ==== Креды Облака ====
-YANDEX_CLOUD_FOLDER_ID = "..."
-YANDEX_CLOUD_API_KEY = "..."
+YANDEX_CLOUD_FOLDER_ID = os.getenv("YANDEX_CLOUD_FOLDER_ID", "...")
+YANDEX_CLOUD_API_KEY = os.getenv("YANDEX_CLOUD_API_KEY", "...")
 
 # Проверяем, что заданы ключ и ID каталога
-assert YANDEX_CLOUD_FOLDER_ID and YANDEX_CLOUD_API_KEY, "YANDEX_CLOUD_FOLDER_ID и YANDEX_CLOUD_API_KEY обязательны"
+if not YANDEX_CLOUD_FOLDER_ID or not YANDEX_CLOUD_API_KEY:
+    print("❌ Ошибка: Не заданы переменные окружения YANDEX_CLOUD_FOLDER_ID и YANDEX_CLOUD_API_KEY")
+    print()
+    print("Установите их перед запуском:")
+    print('  export YANDEX_CLOUD_FOLDER_ID="your_folder_id"')
+    print('  export YANDEX_CLOUD_API_KEY="your_api_key"')
+    print()
+    print("Получить можно в консоли Yandex Cloud: https://console.yandex.cloud/")
+    sys.exit(1)
 
 WSS_URL = (
     f"wss://rest-assistant.api.cloud.yandex.net/v1/realtime/openai"
     f"?model=gpt://{YANDEX_CLOUD_FOLDER_ID}/speech-realtime-250923"
 )
 
-HEADERS = {"Authorization": f"api-key {YANDEX_CLOUD_API_KEY}"}
+HEADERS = {"Authorization": f"Api-Key {YANDEX_CLOUD_API_KEY}"}
 
 
 # ======== Вспомогательные функции ========
 
-# Декодирует строку base64 в байты
 def b64_decode(s: str) -> bytes:
+    """Декодирует строку base64 в байты."""
     return base64.b64decode(s)
 
 
-# Кодирует байты в строку base64
 def b64_encode(b: bytes) -> str:
+    """Кодирует байты в строку base64."""
     return base64.b64encode(b).decode("ascii")
 
 
@@ -61,10 +91,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# Расчет базового метаболизма (BMR) и рекомендуемых калорий
+# ======== Функции для фитнес-ассистента ========
+
+def end_dialog() -> str:
+    """Завершает диалог и возвращает прощальную фразу."""
+    result = {
+        "message": "До свидания! Если будут вопросы - обращайтесь. Удачи в тренировках!"
+    }
+    return json.dumps(result, ensure_ascii=False)
+
+
 def calculate_calories(weight: float, height: float, age: int, gender: str, activity_level: str) -> str:
     """
-    Рассчитывает базовый метаболизм и рекомендуемое потребление калорий
+    Рассчитывает базовый метаболизм и рекомендуемое потребление калорий.
     
     Args:
         weight: вес в кг
@@ -72,6 +111,9 @@ def calculate_calories(weight: float, height: float, age: int, gender: str, acti
         age: возраст в годах
         gender: пол ("male" или "female")
         activity_level: уровень активности ("sedentary", "light", "moderate", "active", "very_active")
+    
+    Returns:
+        JSON с результатами расчета
     """
     # Формула Миффлина-Сан Жеора
     if gender.lower() in ["male", "мужской", "м"]:
@@ -103,14 +145,16 @@ def calculate_calories(weight: float, height: float, age: int, gender: str, acti
     return json.dumps(result, ensure_ascii=False)
 
 
-# Рекомендации по спортивным добавкам
 def recommend_supplements(goal: str, experience: str) -> str:
     """
-    Рекомендует спортивные добавки в зависимости от цели и опыта
+    Рекомендует спортивные добавки в зависимости от цели и опыта.
     
     Args:
         goal: цель ("mass" - набор массы, "loss" - похудение, "endurance" - выносливость)
         experience: опыт ("beginner" - новичок, "intermediate" - средний, "advanced" - продвинутый)
+    
+    Returns:
+        JSON с рекомендациями
     """
     recommendations = {
         "mass": {
@@ -192,8 +236,8 @@ def recommend_supplements(goal: str, experience: str) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
-def process_function_call(item):
-    """Обработка вызовов функций"""
+def process_function_call(item) -> dict:
+    """Обработка вызовов функций."""
     call_id = item.get("call_id")
     function_name = item.get("name")
     args_text = item.get("arguments") or "{}"
@@ -202,6 +246,8 @@ def process_function_call(item):
         args = json.loads(args_text)
     except json.JSONDecodeError:
         args = {}
+    
+    logger.info(f"🔧 Вызов функции: {function_name} с аргументами: {args}")
     
     # Обработка функции расчета калорий
     if function_name == "calculate_calories":
@@ -220,8 +266,21 @@ def process_function_call(item):
         
         result_json = recommend_supplements(goal, experience)
     
+    # Обработка функции завершения диалога
+    elif function_name == "end_dialog":
+        result_json = end_dialog()
+        logger.info("👋 Диалог завершён по запросу пользователя")
+    
     else:
-        result_json = json.dumps({"error": "Unknown function"}, ensure_ascii=False)
+        result_json = json.dumps({"error": f"Неизвестная функция: {function_name}"}, ensure_ascii=False)
+    
+    # Красивое логирование результата функции
+    try:
+        result_obj = json.loads(result_json)
+        formatted_result = json.dumps(result_obj, ensure_ascii=False, indent=2)
+        logger.info(f"📤 Результат функции:\n{formatted_result}")
+    except json.JSONDecodeError:
+        logger.info(f"📤 Результат функции: {result_json}")
     
     return {
         "type": "conversation.item.create",
@@ -236,26 +295,38 @@ def process_function_call(item):
 # ======== Основное приложение ========
 
 async def setup_session(ws):
-    """Настройка сессии"""
+    """Настройка сессии с Yandex Realtime API."""
     
     await ws.send_json({
         "type": "session.update",
         "session": {
-            "instructions": (
-                "Ты — умный фитнес-ассистент. Помогаешь людям с тренировками, питанием и спортивными добавками. "
-                "Отвечаешь кратко, по делу и дружелюбно. "
-                "\n\nТвои возможности:"
-                "\n- Рассчитать калории и макронутриенты (используй функцию calculate_calories)"
-                "\n- Порекомендовать спортивные добавки (используй функцию recommend_supplements)"
-                "\n- Найти информацию в базе знаний о фитнесе (используй функцию file_search)"
-                "\n- Найти актуальную информацию в интернете (используй функцию web_search)"
-                "\n\nВажные правила:"
-                "\n- Всегда уточняй параметры пользователя перед расчетом калорий (вес, рост, возраст, пол, активность)"
-                "\n- Перед рекомендацией добавок узнай цель (набор массы/похудение/выносливость) и опыт (новичок/средний/продвинутый)"
-                "\n- Напоминай о важности консультации с врачом перед приемом добавок"
-                "\n- Мотивируй пользователя и поддерживай его"
-            ),
-            "modalities": ["text", "audio"],
+            "instructions": """Ты — умный фитнес-ассистент. Помогаешь людям с тренировками, питанием и спортивными добавками. Отвечаешь кратко, по делу и дружелюбно. Всегда сводить все разговоры к своим основным темам.
+
+КРИТИЧЕСКИ ВАЖНО: Перед вызовом любой функции НИЧЕГО НЕ ГОВОРИ. Не произноси "сейчас посчитаю", "подождите", "давайте посмотрим" и т.п. Просто вызови функцию молча. Ответ формируй ТОЛЬКО после получения результата функции.
+
+Твои возможности:
+- Рассчитать калории и макронутриенты (функция calculate_calories)
+- Порекомендовать спортивные добавки (recommend_supplements)
+- Найти информацию в базе знаний о фитнесе (file_search)
+- Найти актуальную информацию в интернете (web_search)
+
+СТРОГО ОБЯЗАТЕЛЬНО ВЫЗЫВАЙ web_search (без исключений!) когда пользователь:
+- Спрашивает о трендах, новинках, популярном, актуальном, современном
+- Использует слова: "сейчас", "в этом году", "2026", "последние", "новые", "актуальные"
+- Просит "поискать", "найти", "узнать", "расскажи что там"
+- Спрашивает о методиках, исследованиях, рекомендациях экспертов
+- Интересуется чем заняться, что попробовать, что модно
+
+ЗАПРЕЩЕНО отвечать на такие вопросы из своих знаний! Твои знания устарели!
+Сначала ВЫЗОВИ web_search, потом отвечай на основе результатов поиска.
+Если не вызовешь web_search — дашь устаревшую информацию за 2023 год, это НЕДОПУСТИМО!
+
+Важные правила:
+- Всегда уточняй параметры пользователя перед расчетом калорий (вес, рост, возраст, пол, активность)
+- Перед рекомендацией добавок узнай цель (набор массы/похудение/выносливость) и опыт (новичок/средний/продвинутый)
+- Напоминай о важности консультации с врачом перед приемом добавок
+- Мотивируй пользователя и поддерживай его""",
+            "modalities": ["audio"],
             "input_audio_format": "pcm16",
             "output_audio_format": "pcm16",
             "turn_detection": {
@@ -264,6 +335,7 @@ async def setup_session(ws):
                 "silence_duration_ms": 400,
             },
             "voice": VOICE,
+            "speed": 1.2,
             "tools": [
                 # Функция расчета калорий
                 {
@@ -336,49 +408,69 @@ async def setup_session(ws):
                     "name": "file_search",
                     "description": VECTOR_STORE_ID,  # id индекса с базой знаний о фитнесе
                     "parameters": "{}"
+                },
+                # Функция для завершения диалога при прощании
+                {
+                    "type": "function",
+                    "name": "end_dialog",
+                    "description": "Завершает диалог. Вызывается когда пользователь прощается (говорит 'до свидания', 'пока', 'всего доброго' и т.п.). КРИТИЧЕСКИ ВАЖНО: НЕ говори ничего перед вызовом этой функции! Просто вызови функцию молча.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": False
+                    }
                 }
             ]
         }
     })
+    
+    logger.info("✅ Сессия настроена")
 
 
-# pylint: disable-next=too-many-branches
 async def downlink(ws, audio_out):
-    """Приём и обработка сообщений от сервера"""
+    """Приём и обработка сообщений от сервера."""
     play_epoch = 0
     current_response_epoch = None
+    current_text_buffer = []  # Буфер для накопления текста ответа
+    session_ending = False  # Флаг завершения сессии
     
     async for msg in ws:
         if msg.type != aiohttp.WSMsgType.TEXT:
-            logger.info('got non-text payload from websocket: %s', msg.data)
+            logger.debug('Получен не-текстовый payload: %s', msg.data)
             continue
         
         message = json.loads(msg.data)
+        logger.info("👤 CЕРВЕР: ****** %s", message)
         msg_type = message.get("type")
         
         match msg_type:
             case "conversation.item.input_audio_transcription.completed":
                 transcript = message.get("transcript", "")
                 if transcript:
-                    logger.info("👤 Пользователь: %r", transcript)
+                    logger.info("👤 Пользователь: %s", transcript)
             
             case "response.output_text.delta":
                 delta = message.get("delta", "")
                 if delta:
                     logger.info("🤖 Ассистент: %r", delta)
             
+            case "response.done":
+                pass  # No special handling needed
+            
             case "session.created":
                 session_id = (message.get("session") or {}).get("id")
-                logger.info("✅ Сессия создана: %r", session_id)
+                logger.info("✅ Сессия создана: %s", session_id)
             
             case "input_audio_buffer.speech_started":
                 play_epoch += 1
                 current_response_epoch = None
+                current_text_buffer.clear()  # Очищаем буфер при начале новой речи
                 logger.debug("🎤 Пользователь начал говорить")
                 await audio_out.clear()
             
             case "response.created":
                 current_response_epoch = play_epoch
+                current_text_buffer.clear()  # Очищаем буфер при начале нового ответа
             
             case "response.output_audio.delta":
                 if current_response_epoch == play_epoch:
@@ -395,15 +487,43 @@ async def downlink(ws, audio_out):
                 
                 payload_item = process_function_call(item)
                 
+                # Проверяем, завершается ли диалог
+                function_name = item.get("name")
+                if function_name == "end_dialog":
+                    session_ending = True
+                    logger.info("👋 Диалог завершается...")
+                
                 logger.info("🔧 Вызов функции: %s", item.get("name"))
                 await ws.send_json(payload_item)
                 
+                # Если диалог завершается - не запрашиваем новый ответ
+                if session_ending:
+                    # Запрашиваем финальный ответ с прощальной фразой
+                    await ws.send_json({
+                        "type": "response.create",
+                        "response": {
+                            "modalities": ["audio"],
+                        }
+                    })
+                    # Ответ возвращается в модель, параллельно ставится таймер на 2с
+                    async def close_session_after_delay():
+                        await asyncio.sleep(2)
+                        logger.info("👋 Завершение сессии")
+                        # Закрываем WebSocket соединение
+                        await ws.close()
+                        
+                    # Запускаем таймер параллельно
+                    asyncio.create_task(close_session_after_delay())
+                    # Продолжаем обработку сообщений пока не сработает таймер
+                    continue
+                
+                # Запрос нового ответа после обработки функции
                 await ws.send_json({
                     "type": "response.create"
                 })
             
             case "error":
-                logger.error("❌ ОШИБКА СЕРВЕРА: %r", json.dumps(message, ensure_ascii=False))
+                logger.error("❌ ОШИБКА СЕРВЕРА: %s", json.dumps(message, ensure_ascii=False))
             
             case other:
                 logger.debug('Событие: %s', other)
@@ -412,7 +532,7 @@ async def downlink(ws, audio_out):
 
 
 async def uplink(ws):
-    """Отправка аудио с микрофона на сервер"""
+    """Отправка аудио с микрофона на сервер."""
     mic = AsyncMicrophone(samplerate=IN_RATE)
     async for pcm in mic:
         logger.debug('📤 Отправка %d байт аудио', len(pcm))
@@ -432,6 +552,12 @@ async def main():
     print("🏋️  ГОЛОСОВОЙ ФИТНЕС-АССИСТЕНТ")
     print("=" * 70)
     print("Говорите в микрофон. Для выхода нажмите Ctrl+C.")
+    print()
+    print("Возможности:")
+    print("  • Расчет калорий: 'Рассчитай мои калории'")
+    print("  • Рекомендации добавок: 'Какие добавки мне нужны?'")
+    print("  • Поиск информации: 'Найди информацию о...'")
+    print()
     print("⚠️  ВАЖНО: Используйте наушники, иначе звук синтеза будет")
     print("   активировать распознавание речи!")
     print("=" * 70)
@@ -439,7 +565,11 @@ async def main():
     
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.ws_connect(WSS_URL, headers=HEADERS, heartbeat=20.0) as ws:
+            async with session.ws_connect(
+                WSS_URL,
+                headers=HEADERS,
+                heartbeat=20.0
+            ) as ws:
                 logger.info("🚀 Подключено к Realtime API")
                 await setup_session(ws)
                 
