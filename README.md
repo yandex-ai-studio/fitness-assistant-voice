@@ -24,6 +24,11 @@
 - использование встроенных инструментов `file_search` и `web_search`;
 - обработка завершения диалога.
 
+## Структура проекта
+
+- `voice_agent.py` — основной скрипт голосового ассистента;
+- `data/` — пример файлов для базы знаний.
+
 ## Требования
 
 - Python 3.10+
@@ -40,8 +45,7 @@
 python3 -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 
-pip install aiohttp numpy sounddevice
-pip install git+https://github.com/yandex-cloud/yandex-cloud-ml-sdk.git@experimental_mic
+pip install yandex-ai-studio-sdk sounddevice numpy aiohttp
 ```
 
 ## Настройка переменных окружения
