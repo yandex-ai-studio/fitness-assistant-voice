@@ -63,7 +63,7 @@ export VECTOR_STORE_ID="your_vector_store_id"
 Чтобы использовать поиск по локальным материалам:
 
 1. создайте индекс в Yandex AI Studio;
-2. загрузите в него файлы из папки `data/`;
+2. загрузите в него файлы из папки [data](https://github.com/yandex-ai-studio/fitness-assistant/tree/main/data);
 3. передайте ID индекса через `VECTOR_STORE_ID`.
 
 Этот шаг можно пропустить, если поиск по базе знаний не требуется.
